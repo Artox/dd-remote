@@ -1,0 +1,7 @@
+FROM scratch
+
+ARG EXE=ddrd
+COPY ${EXE} /start
+
+ENTRYPOINT ["/start"]
+CMD []

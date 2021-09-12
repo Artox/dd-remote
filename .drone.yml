@@ -7,25 +7,129 @@ platform:
   os: linux
   arch: arm64
 
+volumes:
+- name: cache
+  temp: {}
+
 steps:
+- name: dependencies
+  image: golang
+  depends_on:
+  - clone
+  volumes:
+  - name: cache
+    path: /go
+  commands:
+  - go get -d ./...
+
 - name: check
   image: golang
+  depends_on:
+  - dependencies
+  volumes:
+  - name: cache
+    path: /go
   commands:
   - go install honnef.co/go/tools/cmd/staticcheck@latest
   - go vet ./...
   - staticcheck ./...
 
-- name: compile
+- name: compile-amd64
   image: golang
+  depends_on:
+  - check
+  volumes:
+  - name: cache
+    path: /go
   commands:
-  - mkdir bin
   - env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddrd-linux-amd64 ./cmd/ddrd
-  - env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddrd-linux-arm64 ./cmd/ddrd
   - env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddr-linux-amd64 ./cmd/ddr
+
+- name: compile-arm64
+  image: golang
+  depends_on:
+  - check
+  volumes:
+  - name: cache
+    path: /go
+  commands:
+  - env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddrd-linux-arm64 ./cmd/ddrd
   - env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddr-linux-arm64 ./cmd/ddr
 
-- name: release
+- name: container-client-amd64
+  image: plugins/docker
+  depends_on:
+  - compile-amd64
+  settings:
+    repo: docker.home.jm0.eu/josua/dd-remote/ddr
+    registry: docker.home.jm0.eu
+    dockerfile: docker/Dockerfile.client
+    auto_tag: true
+    auto_tag_suffix: amd64
+    custom_labels:
+    - arch=amd64
+    build_args:
+    - EXE=bin/ddr-linux-amd64
+
+- name: container-client-arm64
+  image: plugins/docker
+  depends_on:
+  - compile-arm64
+  settings:
+    repo: docker.home.jm0.eu/josua/dd-remote/ddr
+    registry: docker.home.jm0.eu
+    dockerfile: docker/Dockerfile.client
+    auto_tag: true
+    auto_tag_suffix: arm64
+    custom_labels:
+    - arch=arm64v8
+    build_args:
+    - EXE=bin/ddr-linux-amd64
+
+- name: container-server-amd64
+  image: plugins/docker
+  depends_on:
+  - compile-amd64
+  settings:
+    repo: docker.home.jm0.eu/josua/dd-remote/ddrd
+    registry: docker.home.jm0.eu
+    dockerfile: docker/Dockerfile.server
+    auto_tag: true
+    auto_tag_suffix: amd64
+    custom_labels:
+    - arch=amd64
+    build_args:
+    - EXE=bin/ddrd-linux-amd64
+
+- name: container-server-arm64
+  image: plugins/docker
+  depends_on:
+  - compile-arm64
+  settings:
+    repo: docker.home.jm0.eu/josua/dd-remote/ddrd
+    registry: docker.home.jm0.eu
+    dockerfile: docker/Dockerfile.server
+    auto_tag: true
+    auto_tag_suffix: arm64
+    custom_labels:
+    - arch=arm64v8
+    build_args:
+    - EXE=bin/ddrd-linux-amd64
+
+- name: checkpoint
+  image: hello-world
+  depends_on:
+  - compile-amd64
+  - compile-amd64
+  - container-client-amd64
+  - container-client-arm64
+  - container-server-amd64
+  - container-server-arm64
+
+- name: binary-release
   image: plugins/gitea-release
+  depends_on:
+  - checkpoint
   settings:
     api_key:
       from_secret: token
@@ -33,3 +137,25 @@ steps:
     files: bin/*
   when:
     event: tag
+
+- name: container-client-release
+  image: plugins/manifest
+  depends_on:
+  - checkpoint
+  settings:
+    auto_tag: true
+    spec: docker/client.tmpl
+    platforms:
+    - linux/arm64
+    - linux/amd64
+
+- name: container-server-release
+  image: plugins/manifest
+  depends_on:
+  - checkpoint
+  settings:
+    auto_tag: true
+    spec: docker/server.tmpl
+    platforms:
+    - linux/arm64
+    - linux/amd64
