@@ -1,0 +1,35 @@
+---
+kind: pipeline
+type: docker
+name: compile
+
+platform:
+  os: linux
+  arch: arm64
+
+steps:
+- name: check
+  image: golang
+  commands:
+  - go install honnef.co/go/tools/cmd/staticcheck@latest
+  - go vet ./...
+  - staticcheck ./...
+
+- name: compile
+  image: golang
+  commands:
+  - mkdir bin
+  - env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddrd-linux-amd64 ./cmd/ddrd
+  - env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddrd-linux-arm64 ./cmd/ddrd
+  - env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddr-linux-amd64 ./cmd/ddr
+  - env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a -installsuffix cgo -o bin/ddr-linux-arm64 ./cmd/ddr
+
+- name: release
+  image: plugins/gitea-release
+  settings:
+    api_key:
+      from_secret: token
+    base_url: https://git.home.jm0.eu
+    files: bin/*
+  when:
+    event: tag
